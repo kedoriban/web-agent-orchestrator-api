@@ -227,6 +227,10 @@ app.post("/lead", async (req, res) => {
       subject,
       message,
     } = req.body || {};
+    const { bot_field } = req.body || {};
+    if (bot_field && String(bot_field).trim().length > 0) {
+      return res.json({ ok: true, ignored: true });
+}
 
     if (!supabaseUrl || !supabaseServiceKey) {
       return res.status(500).json({
