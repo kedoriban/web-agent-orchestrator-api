@@ -182,6 +182,19 @@ async function upsertGithubFile({ owner, repo, token, filePath, content, message
 
   return putRes.json();
 }
+
+function slugify(input) {
+  return (input || "")
+    .toString()
+    .normalize("NFD") // sépare accents
+    .replace(/[\u0300-\u036f]/g, "") // supprime accents
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-") // tout le reste -> tiret
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 // --- ZIP endpoints ---
 
 // Endpoint binaire (tests locaux / scripts)
@@ -411,12 +424,7 @@ app.post("/publish-slug-github", async (req, res) => {
       return res.status(400).json({ ok: false, error: "html requis" });
     }
 
-    const safeSlug = slug
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9-_]+/gi, "-")
-      .replace(/-+/g, "-")
-      .replace(/^-|-$/g, "");
+    const safeSlug = slugify(slug);
 
     if (!safeSlug) {
       return res.status(400).json({ ok: false, error: "slug invalide" });
