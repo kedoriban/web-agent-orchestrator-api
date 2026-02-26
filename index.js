@@ -6,9 +6,11 @@ const archiver = require("archiver");
 const fs = require("fs");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
+const { execSync } = require("child_process");
 
 const app = express();
 const PORT = 3000;
+const HUB_REPO_PATH = "C:\\web-agent-studio\\sites\\votresite-hub";
 
 const allowedOrigins = [
   "https://jeveuxunjob.eu",
@@ -282,6 +284,74 @@ app.post("/lead", async (req, res) => {
   } catch (err) {
     console.error("POST /lead error:", err);
     return res.status(500).json({ ok: false, error: "server error" });
+  }
+});
+
+app.post("/publish-slug", async (req, res) => {
+  try {
+    const { slug, projectName, html, css, js } = req.body || {};
+
+    if (!slug || typeof slug !== "string") {
+      return res.status(400).json({ ok: false, error: "slug requis" });
+    }
+    if (!html || typeof html !== "string") {
+      return res.status(400).json({ ok: false, error: "html requis" });
+    }
+
+    const safeSlug = slug
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9-_]+/gi, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    if (!safeSlug) {
+      return res.status(400).json({ ok: false, error: "slug invalide" });
+    }
+
+    // Crée le dossier /<slug> dans le hub
+    const slugDir = path.join(HUB_REPO_PATH, safeSlug);
+    const stylesDir = path.join(slugDir, "styles");
+    const jsDir = path.join(slugDir, "js");
+
+    fs.mkdirSync(stylesDir, { recursive: true });
+    fs.mkdirSync(jsDir, { recursive: true });
+
+    // Écrit les fichiers
+    fs.writeFileSync(path.join(slugDir, "index.html"), html, "utf8");
+
+    if (typeof css === "string" && css.trim()) {
+      fs.writeFileSync(path.join(stylesDir, "main.css"), css, "utf8");
+    }
+
+    if (typeof js === "string" && js.trim()) {
+      fs.writeFileSync(path.join(jsDir, "main.js"), js, "utf8");
+    }
+
+    // README optionnel
+    const readme = `# ${projectName || safeSlug}
+
+Déployé automatiquement dans votresite-hub/${safeSlug}
+
+URL:
+- https://votresite.be/${safeSlug}/
+`;
+    fs.writeFileSync(path.join(slugDir, "README.txt"), readme, "utf8");
+
+    // Git add/commit/push
+    const commitMsg = `Publish ${safeSlug}`;
+    execSync(`git add .`, { cwd: HUB_REPO_PATH, stdio: "inherit" });
+    execSync(`git commit -m "${commitMsg}"`, { cwd: HUB_REPO_PATH, stdio: "inherit" });
+    execSync(`git push`, { cwd: HUB_REPO_PATH, stdio: "inherit" });
+
+    return res.json({
+      ok: true,
+      slug: safeSlug,
+      publishedUrl: `https://votresite.be/${safeSlug}/`,
+    });
+  } catch (err) {
+    console.error("publish-slug error:", err);
+    return res.status(500).json({ ok: false, error: "publish failed" });
   }
 });
 
