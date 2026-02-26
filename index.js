@@ -479,6 +479,89 @@ app.post("/patch-slug-github", async (req, res) => {
   }
 });
 
+app.post("/patch-section-github", async (req, res) => {
+  try {
+    const { slug, section, htmlFragment } = req.body || {};
+
+    const safeSlug = slugify(slug);
+    if (!safeSlug) return res.status(400).json({ ok: false, error: "slug requis" });
+
+    const sectionName = slugify(section).replace(/-/g, "");
+    if (!sectionName) return res.status(400).json({ ok: false, error: "section requise" });
+
+    if (!htmlFragment || typeof htmlFragment !== "string") {
+      return res.status(400).json({ ok: false, error: "htmlFragment requis" });
+    }
+
+    const owner = process.env.HUB_REPO_OWNER;
+    const repo = process.env.HUB_REPO_NAME;
+    const token = process.env.GITHUB_TOKEN;
+    if (!owner || !repo || !token) {
+      return res.status(500).json({ ok: false, error: "GitHub env missing" });
+    }
+
+    // Lire index.html existant via GitHub
+    const indexPath = `${safeSlug}/index.html`;
+    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(indexPath).replace(/%2F/g, "/")}`;
+
+    const getRes = await fetch(apiUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "votresite-hub-section-patcher",
+      },
+    });
+
+    if (!getRes.ok) {
+      const t = await getRes.text();
+      throw new Error(`GitHub GET index.html failed (${getRes.status}): ${t}`);
+    }
+
+    const getJson = await getRes.json();
+    const currentHtml = Buffer.from(getJson.content || "", "base64").toString("utf8");
+
+    const startMarker = `<!-- SECTION:${sectionName}:start -->`;
+    const endMarker = `<!-- SECTION:${sectionName}:end -->`;
+
+    const startIdx = currentHtml.indexOf(startMarker);
+    const endIdx = currentHtml.indexOf(endMarker);
+
+    if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
+      return res.status(400).json({
+        ok: false,
+        error: `Section introuvable dans index.html: ${sectionName}`,
+      });
+    }
+
+    const before = currentHtml.slice(0, startIdx + startMarker.length);
+    const after = currentHtml.slice(endIdx);
+
+    const nextHtml = `${before}\n${htmlFragment}\n${after}`;
+
+    // Upsert index.html modifié (réutilise upsertGithubFile déjà présent)
+    await upsertGithubFile({
+      owner,
+      repo,
+      token,
+      filePath: indexPath,
+      content: nextHtml,
+      message: `Patch section ${sectionName} (${safeSlug})`,
+    });
+
+    return res.json({
+      ok: true,
+      slug: safeSlug,
+      section: sectionName,
+      publishedUrl: `https://votresite.be/${safeSlug}/`,
+    });
+  } catch (err) {
+    console.error("patch-section-github error:", err);
+    return res.status(500).json({ ok: false, error: err.message || "patch section failed" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
