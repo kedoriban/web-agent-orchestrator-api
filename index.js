@@ -7,6 +7,7 @@ const fs = require("fs");
 const path = require("path");
 const { createClient } = require("@supabase/supabase-js");
 const { execSync } = require("child_process");
+const fetch = require("node-fetch");
 
 const app = express();
 const PORT = 3000;
@@ -137,6 +138,50 @@ function generateZipBuffer(files) {
   });
 }
 
+async function upsertGithubFile({ owner, repo, token, filePath, content, message }) {
+  const apiBase = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(filePath).replace(/%2F/g, "/")}`;
+
+  // Get existing file to retrieve sha
+  const getRes = await fetch(apiBase, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "votresite-hub-publisher",
+    },
+  });
+
+  let sha = undefined;
+  if (getRes.status === 200) {
+    const json = await getRes.json();
+    sha = json.sha;
+  }
+
+  const putRes = await fetch(apiBase, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "votresite-hub-publisher",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message,
+      content: Buffer.from(content, "utf8").toString("base64"),
+      sha,
+      branch: "main",
+    }),
+  });
+
+  if (!putRes.ok) {
+    const errText = await putRes.text();
+    throw new Error(`GitHub upsert failed (${putRes.status}): ${errText}`);
+  }
+
+  return putRes.json();
+}
 // --- ZIP endpoints ---
 
 // Endpoint binaire (tests locaux / scripts)
@@ -352,6 +397,80 @@ URL:
   } catch (err) {
     console.error("publish-slug error:", err);
     return res.status(500).json({ ok: false, error: "publish failed" });
+  }
+});
+
+app.post("/publish-slug-github", async (req, res) => {
+  try {
+    const { slug, projectName, html, css, js } = req.body || {};
+
+    if (!slug || typeof slug !== "string") {
+      return res.status(400).json({ ok: false, error: "slug requis" });
+    }
+    if (!html || typeof html !== "string") {
+      return res.status(400).json({ ok: false, error: "html requis" });
+    }
+
+    const safeSlug = slug
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9-_]+/gi, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    if (!safeSlug) {
+      return res.status(400).json({ ok: false, error: "slug invalide" });
+    }
+
+    const owner = process.env.HUB_REPO_OWNER;
+    const repo = process.env.HUB_REPO_NAME;
+    const token = process.env.GITHUB_TOKEN;
+
+    if (!owner || !repo || !token) {
+      return res.status(500).json({ ok: false, error: "GitHub env missing" });
+    }
+
+    const baseMsg = `Publish ${safeSlug}`;
+    const files = [
+      {
+        path: `${safeSlug}/index.html`,
+        content: html,
+      },
+      {
+        path: `${safeSlug}/README.txt`,
+        content: `# ${projectName || safeSlug}
+
+Publié automatiquement sur https://votresite.be/${safeSlug}/
+`,
+      },
+    ];
+
+    if (typeof css === "string" && css.trim()) {
+      files.push({ path: `${safeSlug}/styles/main.css`, content: css });
+    }
+    if (typeof js === "string" && js.trim()) {
+      files.push({ path: `${safeSlug}/js/main.js`, content: js });
+    }
+
+    for (const f of files) {
+      await upsertGithubFile({
+        owner,
+        repo,
+        token,
+        filePath: f.path,
+        content: f.content,
+        message: `${baseMsg} (${f.path})`,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      slug: safeSlug,
+      publishedUrl: `https://votresite.be/${safeSlug}/`,
+    });
+  } catch (err) {
+    console.error("publish-slug-github error:", err);
+    return res.status(500).json({ ok: false, error: err.message || "publish failed" });
   }
 });
 
