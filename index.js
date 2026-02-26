@@ -482,6 +482,59 @@ Publié automatiquement sur https://votresite.be/${safeSlug}/
   }
 });
 
+app.get("/slug-files", async (req, res) => {
+  try {
+    const slug = slugify(req.query.slug || "");
+    if (!slug) return res.status(400).json({ ok: false, error: "slug requis" });
+
+    const owner = process.env.HUB_REPO_OWNER;
+    const repo = process.env.HUB_REPO_NAME;
+    const token = process.env.GITHUB_TOKEN;
+    if (!owner || !repo || !token) {
+      return res.status(500).json({ ok: false, error: "GitHub env missing" });
+    }
+
+    // Liste des fichiers qu’on veut (simple et suffisant)
+    const wanted = [
+      `${slug}/index.html`,
+      `${slug}/styles/main.css`,
+      `${slug}/js/main.js`,
+    ];
+
+    async function getGithubContent(filePath) {
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(filePath).replace(/%2F/g, "/")}`;
+
+      const r = await fetch(apiUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "votresite-hub-reader",
+        },
+      });
+
+      if (r.status === 404) return { path: filePath, exists: false };
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`GitHub GET failed (${r.status}): ${t}`);
+      }
+
+      const j = await r.json();
+      const content = j.content ? Buffer.from(j.content, "base64").toString("utf8") : "";
+      return { path: filePath, exists: true, content };
+    }
+
+    const files = [];
+    for (const p of wanted) files.push(await getGithubContent(p));
+
+    return res.json({ ok: true, slug, files });
+  } catch (err) {
+    console.error("slug-files error:", err);
+    return res.status(500).json({ ok: false, error: err.message || "read failed" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
