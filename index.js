@@ -535,6 +535,92 @@ app.get("/slug-files", async (req, res) => {
   }
 });
 
+app.post("/patch-slug-github", async (req, res) => {
+  try {
+    const { slug, html, css, js } = req.body || {};
+
+    const safeSlug = slugify(slug);
+    if (!safeSlug) return res.status(400).json({ ok: false, error: "slug requis" });
+
+    const owner = process.env.HUB_REPO_OWNER;
+    const repo = process.env.HUB_REPO_NAME;
+    const token = process.env.GITHUB_TOKEN;
+    if (!owner || !repo || !token) {
+      return res.status(500).json({ ok: false, error: "GitHub env missing" });
+    }
+
+    // Au moins un des 3 doit être fourni
+    const hasAny =
+      (typeof html === "string" && html.trim()) ||
+      (typeof css === "string" && css.trim()) ||
+      (typeof js === "string" && js.trim());
+
+    if (!hasAny) {
+      return res.status(400).json({ ok: false, error: "Aucun contenu à patcher" });
+    }
+
+    const baseMsg = `Patch ${safeSlug}`;
+
+    // Réutilise upsertGithubFile déjà présent (PUT contents + sha)
+    const ops = [];
+
+    if (typeof html === "string" && html.trim()) {
+      ops.push(
+        upsertGithubFile({
+          owner,
+          repo,
+          token,
+          filePath: `${safeSlug}/index.html`,
+          content: html,
+          message: `${baseMsg} (index.html)`,
+        })
+      );
+    }
+
+    if (typeof css === "string" && css.trim()) {
+      ops.push(
+        upsertGithubFile({
+          owner,
+          repo,
+          token,
+          filePath: `${safeSlug}/styles/main.css`,
+          content: css,
+          message: `${baseMsg} (main.css)`,
+        })
+      );
+    }
+
+    if (typeof js === "string" && js.trim()) {
+      ops.push(
+        upsertGithubFile({
+          owner,
+          repo,
+          token,
+          filePath: `${safeSlug}/js/main.js`,
+          content: js,
+          message: `${baseMsg} (main.js)`,
+        })
+      );
+    }
+
+    await Promise.all(ops);
+
+    return res.json({
+      ok: true,
+      slug: safeSlug,
+      publishedUrl: `https://votresite.be/${safeSlug}/`,
+      patched: {
+        html: !!(typeof html === "string" && html.trim()),
+        css: !!(typeof css === "string" && css.trim()),
+        js: !!(typeof js === "string" && js.trim()),
+      },
+    });
+  } catch (err) {
+    console.error("patch-slug-github error:", err);
+    return res.status(500).json({ ok: false, error: err.message || "patch failed" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
